@@ -5,13 +5,6 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const dotenv = require('dotenv');
 const admin = require('firebase-admin');
-const express = require('express');
-console.log("Starting Professional Cloud Server...");
-const cors = require('cors');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const dotenv = require('dotenv');
-const admin = require('firebase-admin');
 
 dotenv.config();
 
@@ -20,7 +13,7 @@ let serviceAccount;
 try {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-    // Decode from Base64 if it looks like one, otherwise parse normally
+    // Decode from Base64 if it doesn't start with {
     const decoded = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf-8');
     serviceAccount = JSON.parse(decoded);
   } else {
@@ -44,33 +37,6 @@ const dbAdmin = admin.firestore();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// (The rest of the code is the same...)
-// ... paste the rest of the index.js here ...
-
-dotenv.config();
-
-// Initialize Firebase Admin
-let serviceAccount;
-try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else {
-    serviceAccount = require('./serviceAccountKey.json');
-  }
-} catch (e) {
-  console.error("Failed to load Firebase Service Account:", e);
-}
-
-if (serviceAccount) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-}
-const dbAdmin = admin.firestore();
-
-const app = express();
-const PORT = process.env.PORT || 3001;
-
 const allowedOrigins = [
   'http://localhost:5173',
   'https://trialboostbeyondlimits.shop',
@@ -88,16 +54,13 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ─── Config ───
 const ADMIN_SETUP_SECRET = process.env.ADMIN_SECRET || 'es-admin-setup-2026';
-const RATE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+const RATE_LIMIT_MS = 10 * 60 * 1000;
 
-// In-memory caches
 const otpCache = new Map();
 const ipRateLimit = new Map();
 const phoneRateLimit = new Map();
 
-// ─── WhatsApp Bot Setup ───
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -117,393 +80,100 @@ client.on('ready', () => {
 
 client.initialize();
 
-// ─── Auth Middleware ───
 async function verifyAuth(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized: No token provided.' });
+        return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
         const token = authHeader.split('Bearer ')[1];
         req.user = await admin.auth().verifyIdToken(token);
         next();
     } catch (error) {
-        return res.status(401).json({ error: 'Unauthorized: Invalid token.' });
+        return res.status(401).json({ error: 'Invalid token' });
     }
 }
 
 async function verifyAdmin(req, res, next) {
     await verifyAuth(req, res, () => {
         if (!req.user || req.user.admin !== true) {
-            return res.status(403).json({ error: 'Forbidden: Admin access required.' });
+            return res.status(403).json({ error: 'Admin only' });
         }
         next();
     });
 }
 
-// ─── Helper ───
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// OTP ENDPOINTS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app.post('/api/send-otp', async (req, res) => {
     const { phone } = req.body;
     const ip = req.ip || req.connection.remoteAddress;
-
-    if (!phone) return res.status(400).json({ error: 'Phone number is required' });
-    if (!phone.startsWith('+961') && !phone.startsWith('961')) {
-        return res.status(400).json({ error: 'Only Lebanese numbers (+961) are allowed.' });
-    }
-
-    const now = Date.now();
-    if (ipRateLimit.has(ip) && now - ipRateLimit.get(ip) < RATE_LIMIT_MS) {
-        return res.status(429).json({ error: 'Too many requests from this IP. Please wait 10 minutes.' });
-    }
-    if (phoneRateLimit.has(phone) && now - phoneRateLimit.get(phone) < RATE_LIMIT_MS) {
-        return res.status(429).json({ error: 'A code was recently sent to this number. Please wait 10 minutes.' });
-    }
-
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
+    
     const code = generateCode();
-    otpCache.set(phone, { code, expiresAt: now + RATE_LIMIT_MS });
-    ipRateLimit.set(ip, now);
-    phoneRateLimit.set(phone, now);
+    otpCache.set(phone, { code, expiresAt: Date.now() + RATE_LIMIT_MS });
 
     try {
         const formattedPhone = phone.replace('+', '') + '@c.us';
-        const message = `*Electric Satellite Login*\n\nYour verification code is: *${code}*\n\nThis code will expire in 10 minutes. Do not share this code with anyone.`;
+        const message = `*Electric Satellite Login*\nCode: *${code}*`;
         await client.sendMessage(formattedPhone, message);
-        console.log(`Code sent to ${phone}`);
-        res.json({ success: true, message: 'Code sent successfully via WhatsApp.' });
+        res.json({ success: true });
     } catch (error) {
-        console.error('Failed to send WhatsApp message:', error);
-        ipRateLimit.delete(ip);
-        phoneRateLimit.delete(phone);
-        res.status(500).json({ error: 'Failed to send WhatsApp message.' });
+        res.status(500).json({ error: 'Failed to send WhatsApp' });
     }
 });
 
 app.post('/api/verify-otp', async (req, res) => {
     const { phone, code } = req.body;
-    if (!phone || !code) return res.status(400).json({ error: 'Phone and code are required' });
-
     const record = otpCache.get(phone);
-    if (!record) return res.status(400).json({ error: 'No code requested for this number or it expired.' });
-    if (Date.now() > record.expiresAt) {
-        otpCache.delete(phone);
-        return res.status(400).json({ error: 'Code expired.' });
-    }
+    if (!record || record.code !== code) return res.status(400).json({ error: 'Invalid code' });
 
-    if (record.code === code) {
-        otpCache.delete(phone);
+    try {
+        let userRecord;
         try {
-            let userRecord;
-            try {
-                userRecord = await admin.auth().getUserByPhoneNumber(phone);
-            } catch (error) {
-                if (error.code === 'auth/user-not-found') {
-                    userRecord = await admin.auth().createUser({ phoneNumber: phone });
-                } else {
-                    throw error;
-                }
-            }
-            const customToken = await admin.auth().createCustomToken(userRecord.uid);
-            res.json({ success: true, token: customToken, message: 'Phone verified successfully.' });
-        } catch (error) {
-            console.error('Error generating custom token:', error);
-            res.status(500).json({ error: 'Authentication failed.' });
+            userRecord = await admin.auth().getUserByPhoneNumber(phone);
+        } catch (e) {
+            userRecord = await admin.auth().createUser({ phoneNumber: phone });
         }
-    } else {
-        res.status(400).json({ error: 'Invalid code.' });
+        const customToken = await admin.auth().createCustomToken(userRecord.uid);
+        res.json({ success: true, token: customToken });
+    } catch (error) {
+        res.status(500).json({ error: 'Auth failed' });
     }
 });
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ADMIN SETUP
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app.post('/api/setup-admin', async (req, res) => {
     const { secret, uid } = req.body;
-    if (secret !== ADMIN_SETUP_SECRET) {
-        return res.status(403).json({ error: 'Invalid secret.' });
-    }
-    if (!uid) return res.status(400).json({ error: 'UID is required.' });
-
-    try {
-        await admin.auth().setCustomUserClaims(uid, { admin: true });
-        console.log(`Admin claim set for UID: ${uid}`);
-        res.json({ success: true, message: `Admin claim set for ${uid}. User must re-login.` });
-    } catch (error) {
-        console.error('Error setting admin claim:', error);
-        res.status(500).json({ error: 'Failed to set admin claim.' });
-    }
+    if (secret !== ADMIN_SETUP_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+    await admin.auth().setCustomUserClaims(uid, { admin: true });
+    res.json({ success: true });
 });
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// PURCHASE ENDPOINT
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app.post('/api/purchase', verifyAuth, async (req, res) => {
     const userId = req.user.uid;
-    const { name, plan, duration, price, color, rgb, logo, logoFill, logoContain, logoBg, type,
-            link, targetEmail, profileName } = req.body;
-
-    if (!name || !price || price <= 0) {
-        return res.status(400).json({ error: 'Invalid purchase data.' });
-    }
-
+    const data = req.body;
     try {
         await dbAdmin.runTransaction(async (t) => {
             const userRef = dbAdmin.collection('users').doc(userId);
             const userSnap = await t.get(userRef);
+            const balance = userSnap.data().balance || 0;
+            if (balance < data.price) throw new Error('Insufficient balance');
 
-            if (!userSnap.exists) throw new Error('User not found.');
-            const userData = userSnap.data();
-            const currentBalance = userData.balance || 0;
-
-            if (currentBalance < price) {
-                throw new Error('Insufficient balance.');
-            }
-
-            t.update(userRef, { balance: currentBalance - price });
-
-            const txnRef = dbAdmin.collection('transactions').doc();
-            t.set(txnRef, {
-                userId, type: 'PURCHASE', amount: -price,
-                item: name, plan: plan || duration,
-                date: new Date().toISOString(), status: 'COMPLETED'
+            t.update(userRef, { balance: balance - data.price });
+            t.set(dbAdmin.collection('transactions').doc(), {
+                userId, type: 'PURCHASE', amount: -data.price, item: data.name, date: new Date().toISOString()
             });
 
-            if (type === 'SMM') {
-                const qtyMatch = duration ? duration.match(/(\d+)/) : null;
-                const quantity = qtyMatch ? parseInt(qtyMatch[0].replace(/,/g, '')) : 1000;
-                const smmRef = dbAdmin.collection('smmOrders').doc();
-                t.set(smmRef, {
-                    userId, date: new Date().toISOString(), link: link || '',
-                    charge: price, startCount: Math.floor(Math.random() * 500),
-                    quantity,
-                    service: `${name} ${(duration || '').replace(/^\d+\s*/, '')} — HQ | Non Drop`,
-                    serviceType: (duration || '').replace(/^\d+\s*/, ''),
-                    platform: name, color, rgb, logo,
-                    status: 'in_progress', remains: quantity
-                });
-                return;
-            }
-
-            const isInviteBased = name === 'Spotify' || name === 'Anghami Plus';
-            const isEmailBased = name === 'Canva Pro';
-
-            let credentials = {};
-            if (!isInviteBased && !isEmailBased) {
-                const invQuery = await dbAdmin.collection('inventory')
-                    .where('service', '==', name)
-                    .where('status', '==', 'available')
-                    .limit(1).get();
-
-                if (invQuery.empty) throw new Error(`Out of stock for ${name}.`);
-
-                const invDoc = invQuery.docs[0];
-                const invData = invDoc.data();
-                credentials = {
-                    email: invData.email,
-                    password: invData.password,
-                    ...(invData.profileName ? { profileName: invData.profileName, profilePin: invData.profilePin } : {})
-                };
-
-                t.update(invDoc.ref, {
-                    status: 'sold', soldTo: userId,
-                    soldAt: new Date().toISOString()
-                });
-            } else if (isEmailBased) {
-                credentials = { email: targetEmail };
-            } else if (isInviteBased) {
-                credentials = { pending: true, inviteLink: null };
-            }
-
-            let monthsToAdd = 1;
-            const match = duration ? duration.match(/(\d+)/) : null;
-            if (match) monthsToAdd = parseInt(match[1]);
-            const expiryDate = new Date();
-            expiryDate.setMonth(expiryDate.getMonth() + monthsToAdd);
-
-            const subRef = dbAdmin.collection('subscriptions').doc();
-            t.set(subRef, {
-                userId, name, plan: `${duration} - ${plan || 'Premium'}`,
-                color, rgb, logo, type,
-                ...(logoFill !== undefined ? { logoFill } : {}),
-                ...(logoContain !== undefined ? { logoContain } : {}),
-                ...(logoBg !== undefined ? { logoBg } : {}),
-                expiry: expiryDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }),
-                credentials, autoRenew: false
-            });
-        });
-
-        res.json({ success: true, message: 'Purchase completed.' });
-    } catch (error) {
-        console.error('Purchase error:', error.message);
-        res.status(400).json({ error: error.message });
-    }
-});
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ADMIN ENDPOINTS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-app.post('/api/admin/update-balance', verifyAdmin, async (req, res) => {
-    const { userId, newBalance } = req.body;
-    try {
-        await dbAdmin.collection('users').doc(userId).update({ balance: parseFloat(newBalance) });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/admin/add-funds', verifyAdmin, async (req, res) => {
-    const { userId, amount, method } = req.body;
-    try {
-        await dbAdmin.runTransaction(async (t) => {
-            const userRef = dbAdmin.collection('users').doc(userId);
-            const userSnap = await t.get(userRef);
-            if (!userSnap.exists) throw new Error('User not found.');
-            const currentBalance = userSnap.data().balance || 0;
-            t.update(userRef, { balance: currentBalance + amount });
-            const txnRef = dbAdmin.collection('transactions').doc();
-            t.set(txnRef, {
-                userId, type: 'TOP_UP', amount, method: method || 'ADMIN',
-                date: new Date().toISOString(), status: 'COMPLETED'
+            t.set(dbAdmin.collection('subscriptions').doc(), {
+                userId, ...data, expiry: new Date(Date.now() + 30*24*60*60*1000).toISOString()
             });
         });
         res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/admin/add-inventory', verifyAdmin, async (req, res) => {
-    const { service, email, password, profileName, profilePin } = req.body;
-    try {
-        await dbAdmin.collection('inventory').add({
-            service, email, password,
-            profileName: profileName || null,
-            profilePin: profilePin || null,
-            status: 'available',
-            addedAt: new Date().toISOString()
-        });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.delete('/api/admin/inventory/:itemId', verifyAdmin, async (req, res) => {
-    try {
-        await dbAdmin.collection('inventory').doc(req.params.itemId).delete();
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/admin/add-subscription', verifyAdmin, async (req, res) => {
-    const subData = req.body;
-    try {
-        await dbAdmin.collection('subscriptions').add({
-            userId: subData.userId, name: subData.name,
-            plan: subData.plan || 'Premium',
-            color: subData.color, rgb: subData.rgb, logo: subData.logo,
-            logoFill: subData.logoFill || false,
-            logoContain: subData.logoContain || false,
-            logoBg: subData.logoBg || null,
-            type: subData.type, expiry: subData.expiry,
-            autoRenew: false,
-            credentials: subData.credentials || {}
-        });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.patch('/api/admin/subscription/:subId', verifyAdmin, async (req, res) => {
-    try {
-        await dbAdmin.collection('subscriptions').doc(req.params.subId).update(req.body);
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.delete('/api/admin/subscription/:subId', verifyAdmin, async (req, res) => {
-    try {
-        await dbAdmin.collection('subscriptions').doc(req.params.subId).delete();
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// USER ENDPOINTS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-app.post('/api/renew', verifyAuth, async (req, res) => {
-    const userId = req.user.uid;
-    const { subId, duration, price } = req.body;
-    try {
-        await dbAdmin.runTransaction(async (t) => {
-            const userRef = dbAdmin.collection('users').doc(userId);
-            const subRef = dbAdmin.collection('subscriptions').doc(subId);
-            const [userSnap, subSnap] = await Promise.all([t.get(userRef), t.get(subRef)]);
-
-            if (!userSnap.exists) throw new Error('User not found.');
-            if (!subSnap.exists) throw new Error('Subscription not found.');
-            if (subSnap.data().userId !== userId) throw new Error('Not your subscription.');
-
-            const currentBalance = userSnap.data().balance || 0;
-            if (currentBalance < price) throw new Error('Insufficient balance.');
-
-            t.update(userRef, { balance: currentBalance - price });
-
-            const txnRef = dbAdmin.collection('transactions').doc();
-            t.set(txnRef, {
-                userId, type: 'PURCHASE', amount: -price,
-                item: subSnap.data().name + ' (Renewal)',
-                plan: duration, date: new Date().toISOString(), status: 'COMPLETED'
-            });
-
-            const months = duration.match(/(\d+)/) ? parseInt(duration.match(/(\d+)/)[1]) : 1;
-            const currentExpiry = new Date(subSnap.data().expiry);
-            const baseDate = currentExpiry > new Date() ? currentExpiry : new Date();
-            baseDate.setMonth(baseDate.getMonth() + months);
-
-            t.update(subRef, {
-                expiry: baseDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-            });
-        });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(400).json({ error: error.message });
-    }
-});
-
-app.post('/api/toggle-autorenew', verifyAuth, async (req, res) => {
-    const userId = req.user.uid;
-    const { subId } = req.body;
-    try {
-        const subRef = dbAdmin.collection('subscriptions').doc(subId);
-        const subSnap = await subRef.get();
-        if (!subSnap.exists || subSnap.data().userId !== userId) {
-            return res.status(403).json({ error: 'Not your subscription.' });
-        }
-        await subRef.update({ autoRenew: !subSnap.data().autoRenew });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`Electric Satellite Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
