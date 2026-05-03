@@ -5,6 +5,47 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const dotenv = require('dotenv');
 const admin = require('firebase-admin');
+const express = require('express');
+console.log("Starting Professional Cloud Server...");
+const cors = require('cors');
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
+const dotenv = require('dotenv');
+const admin = require('firebase-admin');
+
+dotenv.config();
+
+// Initialize Firebase Admin (Safe Cloud Loading)
+let serviceAccount;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+    // Decode from Base64 if it looks like one, otherwise parse normally
+    const decoded = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf-8');
+    serviceAccount = JSON.parse(decoded);
+  } else {
+    serviceAccount = require('./serviceAccountKey.json');
+  }
+} catch (e) {
+  console.error("CRITICAL: Failed to parse Firebase Service Account JSON.");
+  console.error(e.message);
+}
+
+if (serviceAccount) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  console.log("Firebase Admin initialized successfully.");
+} else {
+  console.error("ERROR: No service account loaded. Check Render environment variables.");
+}
+
+const dbAdmin = admin.firestore();
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// (The rest of the code is the same...)
+// ... paste the rest of the index.js here ...
 
 dotenv.config();
 
