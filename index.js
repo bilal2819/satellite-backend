@@ -1,4 +1,5 @@
 const express = require('express');
+console.log("Starting Professional Cloud Server...");
 const cors = require('cors');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
@@ -103,7 +104,7 @@ async function verifyAdmin(req, res, next) {
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// OTP ENDPOINTS (existing)
+// OTP ENDPOINTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app.post('/api/send-otp', async (req, res) => {
@@ -178,7 +179,7 @@ app.post('/api/verify-otp', async (req, res) => {
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ADMIN SETUP (one-time)
+// ADMIN SETUP
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app.post('/api/setup-admin', async (req, res) => {
@@ -199,13 +200,13 @@ app.post('/api/setup-admin', async (req, res) => {
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// PURCHASE ENDPOINT (authenticated user)
+// PURCHASE ENDPOINT
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app.post('/api/purchase', verifyAuth, async (req, res) => {
     const userId = req.user.uid;
     const { name, plan, duration, price, color, rgb, logo, logoFill, logoContain, logoBg, type,
-            link, targetEmail, profileName, services } = req.body;
+            link, targetEmail, profileName } = req.body;
 
     if (!name || !price || price <= 0) {
         return res.status(400).json({ error: 'Invalid purchase data.' });
@@ -224,10 +225,8 @@ app.post('/api/purchase', verifyAuth, async (req, res) => {
                 throw new Error('Insufficient balance.');
             }
 
-            // Deduct balance
             t.update(userRef, { balance: currentBalance - price });
 
-            // Create transaction record
             const txnRef = dbAdmin.collection('transactions').doc();
             t.set(txnRef, {
                 userId, type: 'PURCHASE', amount: -price,
@@ -235,7 +234,6 @@ app.post('/api/purchase', verifyAuth, async (req, res) => {
                 date: new Date().toISOString(), status: 'COMPLETED'
             });
 
-            // SMM Order
             if (type === 'SMM') {
                 const qtyMatch = duration ? duration.match(/(\d+)/) : null;
                 const quantity = qtyMatch ? parseInt(qtyMatch[0].replace(/,/g, '')) : 1000;
@@ -249,24 +247,20 @@ app.post('/api/purchase', verifyAuth, async (req, res) => {
                     platform: name, color, rgb, logo,
                     status: 'in_progress', remains: quantity
                 });
-                return; // Done for SMM
+                return;
             }
 
-            // Subscription — handle inventory for physical accounts
             const isInviteBased = name === 'Spotify' || name === 'Anghami Plus';
             const isEmailBased = name === 'Canva Pro';
 
             let credentials = {};
             if (!isInviteBased && !isEmailBased) {
-                // Find available inventory
                 const invQuery = await dbAdmin.collection('inventory')
                     .where('service', '==', name)
                     .where('status', '==', 'available')
                     .limit(1).get();
 
-                if (invQuery.empty) {
-                    throw new Error(`Out of stock for ${name}.`);
-                }
+                if (invQuery.empty) throw new Error(`Out of stock for ${name}.`);
 
                 const invDoc = invQuery.docs[0];
                 const invData = invDoc.data();
@@ -276,7 +270,6 @@ app.post('/api/purchase', verifyAuth, async (req, res) => {
                     ...(invData.profileName ? { profileName: invData.profileName, profilePin: invData.profilePin } : {})
                 };
 
-                // Mark inventory as sold
                 t.update(invDoc.ref, {
                     status: 'sold', soldTo: userId,
                     soldAt: new Date().toISOString()
@@ -287,7 +280,6 @@ app.post('/api/purchase', verifyAuth, async (req, res) => {
                 credentials = { pending: true, inviteLink: null };
             }
 
-            // Calculate expiry
             let monthsToAdd = 1;
             const match = duration ? duration.match(/(\d+)/) : null;
             if (match) monthsToAdd = parseInt(match[1]);
@@ -317,12 +309,8 @@ app.post('/api/purchase', verifyAuth, async (req, res) => {
 // ADMIN ENDPOINTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Admin: Update user balance
 app.post('/api/admin/update-balance', verifyAdmin, async (req, res) => {
     const { userId, newBalance } = req.body;
-    if (!userId || newBalance === undefined) {
-        return res.status(400).json({ error: 'userId and newBalance are required.' });
-    }
     try {
         await dbAdmin.collection('users').doc(userId).update({ balance: parseFloat(newBalance) });
         res.json({ success: true });
@@ -331,12 +319,8 @@ app.post('/api/admin/update-balance', verifyAdmin, async (req, res) => {
     }
 });
 
-// Admin: Add funds to user
 app.post('/api/admin/add-funds', verifyAdmin, async (req, res) => {
     const { userId, amount, method } = req.body;
-    if (!userId || !amount || amount <= 0) {
-        return res.status(400).json({ error: 'Valid userId and amount are required.' });
-    }
     try {
         await dbAdmin.runTransaction(async (t) => {
             const userRef = dbAdmin.collection('users').doc(userId);
@@ -356,12 +340,8 @@ app.post('/api/admin/add-funds', verifyAdmin, async (req, res) => {
     }
 });
 
-// Admin: Add inventory
 app.post('/api/admin/add-inventory', verifyAdmin, async (req, res) => {
     const { service, email, password, profileName, profilePin } = req.body;
-    if (!service || !email || !password) {
-        return res.status(400).json({ error: 'service, email, and password are required.' });
-    }
     try {
         await dbAdmin.collection('inventory').add({
             service, email, password,
@@ -376,7 +356,6 @@ app.post('/api/admin/add-inventory', verifyAdmin, async (req, res) => {
     }
 });
 
-// Admin: Delete inventory
 app.delete('/api/admin/inventory/:itemId', verifyAdmin, async (req, res) => {
     try {
         await dbAdmin.collection('inventory').doc(req.params.itemId).delete();
@@ -386,12 +365,8 @@ app.delete('/api/admin/inventory/:itemId', verifyAdmin, async (req, res) => {
     }
 });
 
-// Admin: Add subscription manually
 app.post('/api/admin/add-subscription', verifyAdmin, async (req, res) => {
     const subData = req.body;
-    if (!subData.userId || !subData.name) {
-        return res.status(400).json({ error: 'userId and name are required.' });
-    }
     try {
         await dbAdmin.collection('subscriptions').add({
             userId: subData.userId, name: subData.name,
@@ -410,7 +385,6 @@ app.post('/api/admin/add-subscription', verifyAdmin, async (req, res) => {
     }
 });
 
-// Admin: Edit subscription
 app.patch('/api/admin/subscription/:subId', verifyAdmin, async (req, res) => {
     try {
         await dbAdmin.collection('subscriptions').doc(req.params.subId).update(req.body);
@@ -420,7 +394,6 @@ app.patch('/api/admin/subscription/:subId', verifyAdmin, async (req, res) => {
     }
 });
 
-// Admin: Delete subscription
 app.delete('/api/admin/subscription/:subId', verifyAdmin, async (req, res) => {
     try {
         await dbAdmin.collection('subscriptions').doc(req.params.subId).delete();
@@ -431,16 +404,12 @@ app.delete('/api/admin/subscription/:subId', verifyAdmin, async (req, res) => {
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// USER ENDPOINTS (authenticated)
+// USER ENDPOINTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Renew subscription
 app.post('/api/renew', verifyAuth, async (req, res) => {
     const userId = req.user.uid;
     const { subId, duration, price } = req.body;
-    if (!subId || !duration || !price) {
-        return res.status(400).json({ error: 'subId, duration, and price are required.' });
-    }
     try {
         await dbAdmin.runTransaction(async (t) => {
             const userRef = dbAdmin.collection('users').doc(userId);
@@ -478,7 +447,6 @@ app.post('/api/renew', verifyAuth, async (req, res) => {
     }
 });
 
-// Toggle auto-renew
 app.post('/api/toggle-autorenew', verifyAuth, async (req, res) => {
     const userId = req.user.uid;
     const { subId } = req.body;
@@ -495,7 +463,6 @@ app.post('/api/toggle-autorenew', verifyAuth, async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`Electric Satellite Server running on port ${PORT}`);
 });
