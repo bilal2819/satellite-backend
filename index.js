@@ -16,7 +16,11 @@ try {
   let privateKey = process.env.FB_PRIVATE_KEY;
 
   if (projectId && clientEmail && privateKey) {
-    // Fix common pasting issues with the private key
+    // CLEANING LOGIC: Remove any quotes, extra spaces, and handle escaped newlines
+    privateKey = privateKey.trim();
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+        privateKey = privateKey.substring(1, privateKey.length - 1);
+    }
     privateKey = privateKey.replace(/\\n/g, '\n');
     
     admin.initializeApp({
@@ -26,9 +30,8 @@ try {
         privateKey
       })
     });
-    console.log("Firebase Admin initialized successfully using individual ENV variables.");
+    console.log("Firebase Admin initialized successfully.");
   } else {
-    // Fallback to file for local testing
     const serviceAccount = require('./serviceAccountKey.json');
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
@@ -60,13 +63,6 @@ app.use(cors({
   }
 }));
 app.use(express.json());
-
-const ADMIN_SETUP_SECRET = process.env.ADMIN_SECRET || 'es-admin-setup-2026';
-const RATE_LIMIT_MS = 10 * 60 * 1000;
-
-const otpCache = new Map();
-const ipRateLimit = new Map();
-const phoneRateLimit = new Map();
 
 const client = new Client({
     authStrategy: new LocalAuth(),
@@ -117,7 +113,7 @@ app.post('/api/send-otp', async (req, res) => {
     if (!phone) return res.status(400).json({ error: 'Phone required' });
     
     const code = generateCode();
-    otpCache.set(phone, { code, expiresAt: Date.now() + RATE_LIMIT_MS });
+    otpCache.set(phone, { code, expiresAt: Date.now() + (10 * 60 * 1000) });
 
     try {
         const formattedPhone = phone.replace('+', '') + '@c.us';
@@ -150,7 +146,7 @@ app.post('/api/verify-otp', async (req, res) => {
 
 app.post('/api/setup-admin', async (req, res) => {
     const { secret, uid } = req.body;
-    if (secret !== ADMIN_SETUP_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+    if (secret !== (process.env.ADMIN_SECRET || 'es-admin-setup-2026')) return res.status(403).json({ error: 'Invalid secret' });
     await admin.auth().setCustomUserClaims(uid, { admin: true });
     res.json({ success: true });
 });
