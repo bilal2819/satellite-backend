@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:20-slim
 
 # Install dependencies for Puppeteer/Chrome
 RUN apt-get update && apt-get install -y \
@@ -40,7 +40,8 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     xdg-utils \
     wget \
-    libgbm-dev
+    libgbm-dev \
+    libasound2-dev
 
 WORKDIR /app
 
@@ -49,6 +50,8 @@ RUN npm install
 
 COPY . .
 
+# Set Port to whatever Render provides
+ENV PORT=3001
 EXPOSE 3001
 
 CMD ["npm", "start"]
