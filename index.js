@@ -1,5 +1,4 @@
 const express = require('express');
-console.log("Starting Professional Cloud Server...");
 const cors = require('cors');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
@@ -8,29 +7,37 @@ const admin = require('firebase-admin');
 
 dotenv.config();
 
-// Initialize Firebase Admin (Safe Cloud Loading)
-let serviceAccount;
+console.log("Starting Professional Cloud Server...");
+
+// ─── UNBREAKABLE FIREBASE INITIALIZATION ───
 try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-    // Decode from Base64 if it doesn't start with {
-    const decoded = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf-8');
-    serviceAccount = JSON.parse(decoded);
+  const projectId = process.env.FB_PROJECT_ID;
+  const clientEmail = process.env.FB_CLIENT_EMAIL;
+  let privateKey = process.env.FB_PRIVATE_KEY;
+
+  if (projectId && clientEmail && privateKey) {
+    // Fix common pasting issues with the private key
+    privateKey = privateKey.replace(/\\n/g, '\n');
+    
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId,
+        clientEmail,
+        privateKey
+      })
+    });
+    console.log("Firebase Admin initialized successfully using individual ENV variables.");
   } else {
-    serviceAccount = require('./serviceAccountKey.json');
+    // Fallback to file for local testing
+    const serviceAccount = require('./serviceAccountKey.json');
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("Firebase Admin initialized using local JSON file.");
   }
 } catch (e) {
-  console.error("CRITICAL: Failed to parse Firebase Service Account JSON.");
+  console.error("CRITICAL ERROR: Failed to initialize Firebase.");
   console.error(e.message);
-}
-
-if (serviceAccount) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-  console.log("Firebase Admin initialized successfully.");
-} else {
-  console.error("ERROR: No service account loaded. Check Render environment variables.");
 }
 
 const dbAdmin = admin.firestore();
@@ -107,7 +114,6 @@ const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString(
 
 app.post('/api/send-otp', async (req, res) => {
     const { phone } = req.body;
-    const ip = req.ip || req.connection.remoteAddress;
     if (!phone) return res.status(400).json({ error: 'Phone required' });
     
     const code = generateCode();
