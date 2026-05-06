@@ -1,7 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const qrcodeTerminal = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const dotenv = require('dotenv');
 const admin = require('firebase-admin');
 
@@ -105,6 +106,7 @@ const RATE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
 const otpCache = new Map();
 const ipRateLimit = new Map();
 const phoneRateLimit = new Map();
+let latestQR = null; // Store latest QR for the /qr page
 
 // ─── WhatsApp Bot Setup ───
 const client = new Client({
@@ -116,12 +118,14 @@ const client = new Client({
 });
 
 client.on('qr', (qr) => {
-    console.log('QR RECEIVED. Scan this with your WhatsApp:');
-    qrcode.generate(qr, { small: true });
+    console.log('QR RECEIVED. Visit /qr to scan it.');
+    qrcodeTerminal.generate(qr, { small: true });
+    latestQR = qr;
 });
 
 client.on('ready', () => {
     console.log('✅ WhatsApp Bot is ready!');
+    latestQR = null; // Clear QR once authenticated
 });
 
 client.on('auth_failure', (msg) => {
@@ -137,6 +141,33 @@ client.initialize();
 // ─── Health Check (Render needs this) ───
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ─── QR Code Page (scan WhatsApp from your browser) ───
+app.get('/qr', async (req, res) => {
+    if (!latestQR) {
+        return res.send(`
+            <html><body style="background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column">
+                <h1>✅ WhatsApp Bot is already connected!</h1>
+                <p style="color:#888">No QR code needed. The bot is running.</p>
+                <script>setTimeout(() => location.reload(), 10000)</script>
+            </body></html>
+        `);
+    }
+    try {
+        const qrImageDataUrl = await QRCode.toDataURL(latestQR, { width: 400, margin: 2 });
+        res.send(`
+            <html><body style="background:#111;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column">
+                <h1>📱 Scan with WhatsApp</h1>
+                <p style="color:#888;margin-bottom:20px">Open WhatsApp → Linked Devices → Link a Device</p>
+                <img src="${qrImageDataUrl}" style="border-radius:12px" />
+                <p style="color:#555;margin-top:20px;font-size:14px">This page auto-refreshes every 15 seconds</p>
+                <script>setTimeout(() => location.reload(), 15000)</script>
+            </body></html>
+        `);
+    } catch (e) {
+        res.status(500).send('Failed to generate QR image');
+    }
 });
 
 // ─── Auth Middleware ───
