@@ -261,12 +261,14 @@ app.post('/api/verify-otp', async (req, res) => {
     if (record.code === code) {
         otpCache.delete(phone);
         try {
-            let userRecord;
+                        let userRecord;
+            const cleanPhone = phone.replace(/\s+/g, ''); // Fix Firebase format mismatch
             try {
-                userRecord = await admin.auth().getUserByPhoneNumber(phone);
+                userRecord = await admin.auth().getUserByPhoneNumber(cleanPhone);
             } catch (error) {
                 if (error.code === 'auth/user-not-found') {
-                    userRecord = await admin.auth().createUser({ phoneNumber: phone });
+                    userRecord = await admin.auth().createUser({ phoneNumber: cleanPhone });
+
                 } else {
                     throw error;
                 }
