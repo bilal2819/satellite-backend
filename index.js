@@ -112,7 +112,16 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox', 
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process', 
+            '--disable-gpu'
+        ]
     }
 });
 
@@ -219,7 +228,13 @@ app.post('/api/send-otp', async (req, res) => {
     phoneRateLimit.set(phone, now);
 
     try {
-        const formattedPhone = phone.replace('+', '') + '@c.us';
+        const formattedPhone = phone.replace(/\D/g, '') + '@c.us';
+        
+        // Ensure client is ready
+        if (!client.info) {
+            throw new Error('WhatsApp Bot is still initializing/syncing. Please wait a minute.');
+        }
+
         const message = `*Electric Satellite Login*\n\nYour verification code is: *${code}*\n\nThis code will expire in 10 minutes. Do not share this code with anyone.`;
         await client.sendMessage(formattedPhone, message);
         console.log(`Code sent to ${phone}`);
@@ -228,7 +243,7 @@ app.post('/api/send-otp', async (req, res) => {
         console.error('Failed to send WhatsApp message:', error);
         ipRateLimit.delete(ip);
         phoneRateLimit.delete(phone);
-        res.status(500).json({ error: 'Failed to send WhatsApp message.' });
+        res.status(500).json({ error: `Failed to send WhatsApp message: ${error.message}` });
     }
 });
 
