@@ -1,11 +1,20 @@
 const express = require('express');
 const cors = require('cors');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, RemoteAuth } = require('whatsapp-web.js');
+const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
 const qrcodeTerminal = require('qrcode-terminal');
 const dotenv = require('dotenv');
 const admin = require('firebase-admin');
 
 dotenv.config();
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
 
 console.log('Starting Electric Satellite Server...');
 
@@ -107,44 +116,64 @@ const ipRateLimit = new Map();
 const phoneRateLimit = new Map();
 let latestQR = null; // Store latest QR for the /qr page
 
-// ─── WhatsApp Bot Setup ───
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process', 
-            '--disable-gpu'
-        ]
-    }
-});
+// ─── MongoDB & WhatsApp Bot Setup ───
+let client;
 
-client.on('qr', (qr) => {
-    console.log('QR RECEIVED. Visit /qr to scan it.');
-    qrcodeTerminal.generate(qr, { small: true });
-    latestQR = qr;
-});
+mongoose.connect(process.env.MONGODB_URI).then(() => {
+    console.log('✅ Connected to MongoDB Atlas');
+    const store = new MongoStore({ mongoose: mongoose });
 
-client.on('ready', () => {
-    console.log('✅ WhatsApp Bot is ready!');
-    latestQR = null; // Clear QR once authenticated
-});
+    client = new Client({
+        authStrategy: new RemoteAuth({
+            store: store,
+            backupSyncIntervalMs: 300000 // Save session to DB every 5 mins
+        }),
+        webVersionCache: {
+            type: 'remote',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+        },
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process', 
+                '--disable-gpu'
+            ]
+        }
+    });
 
-client.on('auth_failure', (msg) => {
-    console.error('❌ WhatsApp auth failure:', msg);
-});
+    client.on('qr', (qr) => {
+        console.log('QR RECEIVED. Visit /qr to scan it.');
+        qrcodeTerminal.generate(qr, { small: true });
+        latestQR = qr;
+    });
 
-client.on('disconnected', (reason) => {
-    console.log('⚠️ WhatsApp disconnected:', reason);
-});
+    client.on('ready', () => {
+        console.log('✅ WhatsApp Bot is ready!');
+        latestQR = null; // Clear QR once authenticated
+    });
 
-client.initialize();
+    client.on('remote_session_saved', () => {
+        console.log('✅ WhatsApp session successfully saved to MongoDB');
+    });
+
+    client.on('auth_failure', (msg) => {
+        console.error('❌ WhatsApp auth failure:', msg);
+    });
+
+    client.on('disconnected', (reason) => {
+        console.log('⚠️ WhatsApp disconnected:', reason);
+    });
+
+    client.initialize();
+}).catch((err) => {
+    console.error('🔴 Failed to connect to MongoDB. Is MONGODB_URI set? Error:', err.message);
+});
 
 // ─── Health Check (Render needs this) ───
 app.get('/health', (req, res) => {
@@ -231,7 +260,7 @@ app.post('/api/send-otp', async (req, res) => {
         const formattedPhone = phone.replace(/\D/g, '') + '@c.us';
         
         // Ensure client is ready
-        if (!client.info) {
+        if (!client || !client.info) {
             throw new Error('WhatsApp Bot is still initializing/syncing. Please wait a minute.');
         }
 
@@ -261,14 +290,13 @@ app.post('/api/verify-otp', async (req, res) => {
     if (record.code === code) {
         otpCache.delete(phone);
         try {
-                        let userRecord;
+            let userRecord;
             const cleanPhone = phone.replace(/\s+/g, ''); // Fix Firebase format mismatch
             try {
                 userRecord = await admin.auth().getUserByPhoneNumber(cleanPhone);
             } catch (error) {
                 if (error.code === 'auth/user-not-found') {
                     userRecord = await admin.auth().createUser({ phoneNumber: cleanPhone });
-
                 } else {
                     throw error;
                 }
