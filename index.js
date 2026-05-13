@@ -223,13 +223,10 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
             execSync(`tar -xzf ${tempZip} -C ${__dirname}`);
             console.log('✅ WhatsApp session restored successfully!');
 
-            // Fix "Profile in use" error by removing leftover locks
+            // POWER UNLOCK: Recursively find and delete all Singleton locks to prevent "Profile in use" error
             try {
-                const lockFile = path.join(sessionDir, 'session-electric-satellite-bot', 'SingletonLock');
-                if (fs.existsSync(lockFile)) {
-                    fs.unlinkSync(lockFile);
-                    console.log('🔓 Removed leftover SingletonLock.');
-                }
+                execSync(`find ${sessionDir} -name "Singleton*" -delete`);
+                console.log('🔓 Nuclear scan: All leftover Singleton locks removed!');
             } catch (e) { /* ignore */ }
         }
     } catch (err) { console.log('ℹ️ No session restored:', err.message); }
