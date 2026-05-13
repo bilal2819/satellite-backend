@@ -222,6 +222,15 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
             fs.mkdirSync(sessionDir, { recursive: true });
             execSync(`tar -xzf ${tempZip} -C ${__dirname}`);
             console.log('✅ WhatsApp session restored successfully!');
+
+            // Fix "Profile in use" error by removing leftover locks
+            try {
+                const lockFile = path.join(sessionDir, 'session-electric-satellite-bot', 'SingletonLock');
+                if (fs.existsSync(lockFile)) {
+                    fs.unlinkSync(lockFile);
+                    console.log('🔓 Removed leftover SingletonLock.');
+                }
+            } catch (e) { /* ignore */ }
         }
     } catch (err) { console.log('ℹ️ No session restored:', err.message); }
 
