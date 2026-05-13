@@ -257,7 +257,8 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
         try {
             console.log('💾 Backing up WhatsApp session to MongoDB...');
             const tempZip = path.join(os.tmpdir(), 'session.tar.gz');
-            execSync(`tar -czf ${tempZip} -C ${__dirname} .wwebjs_auth`);
+            // Exclude Cache folders to prevent "file changed" errors and reduce size
+            execSync(`tar -czf ${tempZip} --exclude='*Cache*' -C ${__dirname} .wwebjs_auth`);
             const zipBase64 = fs.readFileSync(tempZip, { encoding: 'base64' });
             
             await mongoose.connection.db.collection('whatsapp_sessions').updateOne(
