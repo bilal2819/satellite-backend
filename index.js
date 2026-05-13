@@ -218,58 +218,61 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
             console.log('📦 Found WhatsApp session in MongoDB. Restoring...');
             const tempZip = path.join(os.tmpdir(), 'session.tar.gz');
             fs.writeFileSync(tempZip, Buffer.from(sessionSnap.zip, 'base64'));
-            
             if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
             fs.mkdirSync(sessionDir, { recursive: true });
-            
             execSync(`tar -xzf ${tempZip} -C ${__dirname}`);
             console.log('✅ WhatsApp session restored successfully!');
         }
-    } catch (err) {
-        console.log('ℹ️ No session restored:', err.message);
-    }
+    } catch (err) { console.log('ℹ️ No session restored:', err.message); }
 
     client = new Client({
-        authStrategy: new LocalAuth({
-            clientId: 'electric-satellite-bot',
-            dataPath: sessionDir
-        }),
-        webVersionCache: {
-            type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-        },
-        puppeteer: {
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        authStrategy: new LocalAuth({ clientId: 'electric-satellite-bot', dataPath: sessionDir }),
+        webVersionCache: { type: 'remote', remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html' },
+        puppeteer: { 
+            headless: true, 
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu',
+                '--js-flags="--max-old-space-size=512"'
+            ] 
         }
     });
 
-    client.on('qr', (qr) => {
+    client.on('qr', (qr) => { 
         console.log('QR RECEIVED. Visit /qr to scan it.');
-        latestQR = qr;
+        latestQR = qr; 
+        qrcodeTerminal.generate(qr, { small: true });
     });
 
-    client.on('ready', async () => {
+    client.on('authenticated', () => {
+        console.log('🔓 WhatsApp Authenticated! Clearing QR...');
+        latestQR = null;
+    });
+
+    client.on('ready', () => {
         console.log('✅ WhatsApp Bot is ready!');
         latestQR = null;
 
-        // 2. POST-READY: Save session back to MongoDB for persistence
-        try {
-            console.log('💾 Backing up WhatsApp session to MongoDB...');
-            const tempZip = path.join(os.tmpdir(), 'session.tar.gz');
-            // --ignore-failed-read allows backup to finish even if WhatsApp is writing to files
-            execSync(`tar --ignore-failed-read -czf ${tempZip} --exclude='*Cache*' -C ${__dirname} .wwebjs_auth`);
-            const zipBase64 = fs.readFileSync(tempZip, { encoding: 'base64' });
-            
-            await mongoose.connection.db.collection('whatsapp_sessions').updateOne(
-                { id: 'latest' },
-                { $set: { zip: zipBase64, updatedAt: new Date() } },
-                { upsert: true }
-            );
-            console.log('💾 SUCCESS: WhatsApp session backed up to MongoDB!');
-        } catch (err) {
-            console.error('❌ Failed to backup WhatsApp session:', err.message);
-        }
+        // Wait 30 seconds after login before backing up to avoid crashing Render
+        setTimeout(async () => {
+            try {
+                console.log('💾 Starting background backup to MongoDB...');
+                const tempZip = path.join(os.tmpdir(), 'session.tar.gz');
+                execSync(`tar --ignore-failed-read -czf ${tempZip} --exclude='*Cache*' -C ${__dirname} .wwebjs_auth`);
+                await mongoose.connection.db.collection('whatsapp_sessions').updateOne(
+                    { id: 'latest' },
+                    { $set: { zip: fs.readFileSync(tempZip, { encoding: 'base64' }), updatedAt: new Date() } },
+                    { upsert: true }
+                );
+                console.log('💾 SUCCESS: WhatsApp session backed up to MongoDB!');
+            } catch (err) { console.error('❌ Backup failed:', err.message); }
+        }, 30000);
     });
 
     client.initialize();
