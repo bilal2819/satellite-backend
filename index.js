@@ -206,41 +206,69 @@ app.delete('/api/admin/user/:uid', verifyAdmin, async (req, res) => {
 
 // ─── MongoDB & WhatsApp Manual Sync ───
 let client;
-const sessionDir = path.join(__dirname, '.wwebjs_auth');
 
 mongoose.connect(process.env.MONGODB_URI).then(async () => {
     console.log('✅ Connected to MongoDB');
 
+    // 1. PRE-START: Attempt to load session from MongoDB
+    const sessionDir = path.join(__dirname, '.wwebjs_auth');
     try {
-        const sessionSnap = await dbAdmin.collection('config').doc('whatsapp_session').get();
-        if (sessionSnap.exists) {
-            console.log('📦 Restoring WhatsApp session from Firestore...');
+        const sessionSnap = await mongoose.connection.db.collection('whatsapp_sessions').findOne({ id: 'latest' });
+        if (sessionSnap && sessionSnap.zip) {
+            console.log('📦 Found WhatsApp session in MongoDB. Restoring...');
             const tempZip = path.join(os.tmpdir(), 'session.tar.gz');
-            fs.writeFileSync(tempZip, Buffer.from(sessionSnap.data().zip, 'base64'));
+            fs.writeFileSync(tempZip, Buffer.from(sessionSnap.zip, 'base64'));
+            
             if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
             fs.mkdirSync(sessionDir, { recursive: true });
+            
             execSync(`tar -xzf ${tempZip} -C ${__dirname}`);
-            console.log('✅ Session restored!');
+            console.log('✅ WhatsApp session restored successfully!');
         }
-    } catch (e) { console.log('ℹ️ No session found to restore.'); }
+    } catch (err) {
+        console.log('ℹ️ No session restored:', err.message);
+    }
 
     client = new Client({
-        authStrategy: new LocalAuth({ clientId: 'electric-satellite-bot', dataPath: sessionDir }),
-        webVersionCache: { type: 'remote', remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html' },
-        puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] }
+        authStrategy: new LocalAuth({
+            clientId: 'electric-satellite-bot',
+            dataPath: sessionDir
+        }),
+        webVersionCache: {
+            type: 'remote',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+        },
+        puppeteer: {
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        }
     });
 
-    client.on('qr', (qr) => { latestQR = qr; qrcodeTerminal.generate(qr, { small: true }); });
+    client.on('qr', (qr) => {
+        console.log('QR RECEIVED. Visit /qr to scan it.');
+        latestQR = qr;
+    });
+
     client.on('ready', async () => {
         console.log('✅ WhatsApp Bot is ready!');
         latestQR = null;
+
+        // 2. POST-READY: Save session back to MongoDB for persistence
         try {
-            console.log('💾 Saving session to Firestore...');
+            console.log('💾 Backing up WhatsApp session to MongoDB...');
             const tempZip = path.join(os.tmpdir(), 'session.tar.gz');
             execSync(`tar -czf ${tempZip} -C ${__dirname} .wwebjs_auth`);
-            await dbAdmin.collection('config').doc('whatsapp_session').set({ zip: fs.readFileSync(tempZip, { encoding: 'base64' }), updatedAt: new Date().toISOString() });
-            console.log('✅ Session saved!');
-        } catch (e) { console.error('❌ Save failed:', e.message); }
+            const zipBase64 = fs.readFileSync(tempZip, { encoding: 'base64' });
+            
+            await mongoose.connection.db.collection('whatsapp_sessions').updateOne(
+                { id: 'latest' },
+                { $set: { zip: zipBase64, updatedAt: new Date() } },
+                { upsert: true }
+            );
+            console.log('💾 SUCCESS: WhatsApp session backed up to MongoDB!');
+        } catch (err) {
+            console.error('❌ Failed to backup WhatsApp session:', err.message);
+        }
     });
 
     client.initialize();
