@@ -141,9 +141,20 @@ const otpCache = new Map();
 const RATE_LIMIT_MS = 10 * 60 * 1000;
 const ipRateLimit = new Map();
 const phoneRateLimit = new Map();
+function normalizePhone(phone) {
+    if (!phone) return null;
+    let cleaned = phone.replace(/\s+/g, '').replace(/-/g, '').replace(/\(/g, '').replace(/\)/g, '');
+    if (cleaned.startsWith('00')) cleaned = '+' + cleaned.substring(2);
+    if (!cleaned.startsWith('+')) {
+        if (cleaned.startsWith('0')) cleaned = '+961' + cleaned.substring(1);
+        else cleaned = '+961' + cleaned;
+    }
+    return cleaned;
+}
 
 app.post('/api/send-otp', async (req, res) => {
-    const { phone } = req.body;
+    const rawPhone = req.body.phone;
+    const phone = normalizePhone(rawPhone);
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     if (!phone) return res.status(400).json({ error: 'Phone required' });
     
@@ -161,15 +172,24 @@ app.post('/api/send-otp', async (req, res) => {
 });
 
 app.post('/api/verify-otp', async (req, res) => {
-    const { phone, code } = req.body;
+    const { code } = req.body;
+    const phone = normalizePhone(req.body.phone);
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
     const record = otpCache.get(phone);
     if (!record || record.code !== code) return res.status(400).json({ error: 'Invalid code' });
     otpCache.delete(phone);
 
     try {
         let userRecord;
-        try { userRecord = await admin.auth().getUserByPhoneNumber(phone); }
-        catch (e) { userRecord = await admin.auth().createUser({ phoneNumber: phone }); }
+        try { 
+            userRecord = await admin.auth().getUserByPhoneNumber(phone); 
+        } catch (e) { 
+            if (e.code === 'auth/user-not-found') {
+                userRecord = await admin.auth().createUser({ phoneNumber: phone }); 
+            } else {
+                throw e;
+            }
+        }
 
         const userRef = dbAdmin.collection('users').doc(userRecord.uid);
         const userSnap = await userRef.get();
